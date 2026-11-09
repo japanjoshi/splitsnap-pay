@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<title>Pay your share · SplitSnap</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+<!--
+  SplitSnap's tap-to-pay page. A friend opens a link like
+    https://<host>/p#pa=name@bank&pn=Japan&am=615.00&cu=INR&tn=The%20Green%20House&to=Rahul&s=<split>&f=<friend>
+  Everything is after "#", which browsers never send to the server: the host sees no UPI ID or amount,
+  and nothing is stored anywhere. The page only turns the details into buttons that open UPI apps.
+
+  After paying, the friend taps "I've paid" and sends the payer a second link to this page (v=paid). On the
+  payer's phone that shows a button that opens SplitSnap (splitsnap://paid?s=..&f=..) to tick the friend off.
+  Nothing here can see whether money moved: it is the friend's word, and the app asks the payer to check.
+-->
+<style>
+  :root {
+    --canvas: #F3F4F1; --card: #FFFFFF; --field: #EDEEEA; --border: #E4E6E1;
+    --ink: #111614; --muted: #68716D; --brand: #0B7B5E; --brand-soft: #DDF3E8; --on-brand-soft: #075640;
+    --danger: #C4321F;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --canvas: #0B0E0D; --card: #161A19; --field: #1F2422; --border: #262C2A;
+      --ink: #F1F4F2; --muted: #9AA39F; --brand: #4FD8A0; --brand-soft: #13342A; --on-brand-soft: #8BEBC2;
+      --danger: #FF8A78;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--canvas); color: var(--ink);
+    font-family: Manrope, -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased; display: flex; justify-content: center;
+    padding: max(20px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+  }
+  main { width: 100%; max-width: 420px; }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 15px; margin: 4px 4px 22px; }
+  .logo { width: 26px; height: 26px; border-radius: 8px; background: #0E7C66; display: grid; place-items: center; }
+  .card { background: var(--card); border-radius: 28px; padding: 26px 22px 22px; }
+  .eyebrow { font-size: 12px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  h1 { font-size: 22px; font-weight: 800; letter-spacing: -.02em; margin: 6px 0 2px; }
+  .amount { font-size: 52px; font-weight: 800; letter-spacing: -.04em; line-height: 1.05; margin: 14px 0 4px;
+            font-variant-numeric: tabular-nums; color: var(--brand); }
+  .to { color: var(--muted); font-size: 15px; font-weight: 600; margin-bottom: 22px; overflow-wrap: anywhere; }
+  .to b { color: var(--ink); }
+  .btn { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 56px;
+         border-radius: 999px; border: 0; font: inherit; font-size: 16px; font-weight: 700; text-decoration: none;
+         cursor: pointer; margin-top: 10px; }
+  .primary { background: var(--ink); color: var(--canvas); }
+  .app { background: var(--field); color: var(--ink); }
+  .apps { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 10px; }
+  .apps .btn { margin-top: 0; font-size: 14px; min-height: 52px; }
+  .secondary { background: transparent; color: var(--ink); border: 1.5px solid var(--border); }
+  .done { background: var(--brand); color: #fff; }
+  .copy { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 18px; }
+  .copy button { background: transparent; border: 1.5px solid var(--border); color: var(--ink); border-radius: 16px;
+                 padding: 10px 12px; font: inherit; font-weight: 700; font-size: 13px; text-align: left; cursor: pointer; }
+  .copy small { display: block; color: var(--muted); font-weight: 600; font-size: 11px; margin-bottom: 2px; }
+  .copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #qr { display: none; margin: 18px auto 0; padding: 12px; background: #fff; border-radius: 16px; width: fit-content; }
+  .note { color: var(--muted); font-size: 13px; line-height: 1.45; margin: 18px 6px 0; }
+  .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: var(--ink); color: var(--canvas);
+           padding: 10px 16px; border-radius: 14px; font-weight: 700; font-size: 14px; opacity: 0; transition: opacity .2s; }
+  .toast.show { opacity: 1; }
+  .error h1 { color: var(--danger); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <div class="brand">
+    <span class="logo" aria-hidden="true">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="#fff"><path d="M14 4l2.29 2.29-2.88 2.88 1.42 1.42 2.88-2.88L20 10V4h-6zm-4 0H4v6l2.29-2.29 4.71 4.7V20h2v-8.41l-5.29-5.3L10 4z"/></svg>
+    </span>
+    SplitSnap
+  </div>
+
+  <section class="card" id="pay" hidden>
+    <div class="eyebrow" id="who">Your share</div>
+    <h1 id="what"></h1>
+    <div class="amount" id="amount"></div>
+    <div class="to">to <b id="payee"></b> · <span id="vpa"></span></div>
+
+    <a class="btn primary" id="any" hidden>Pay with any UPI app</a>
+    <div class="apps" id="apps">
+      <a class="btn app" id="gpay">GPay</a>
+      <a class="btn app" id="phonepe">PhonePe</a>
+      <a class="btn app" id="paytm">Paytm</a>
+    </div>
+
+    <div class="copy">
+      <button type="button" id="copyVpa"><small>UPI ID</small><span id="copyVpaText"></span></button>
+      <button type="button" id="copyAmount"><small>Amount</small><span id="copyAmountText"></span></button>
+    </div>
+    <div id="qr" aria-label="QR code to pay from another phone"></div>
+    <button type="button" class="btn secondary" id="paid" style="margin-top:18px">I’ve paid</button>
+  </section>
+
+  <section class="card" id="claim" hidden>
+    <div class="eyebrow">Paid back</div>
+    <h1 id="claimWho"></h1>
+    <div class="amount" id="claimAmount"></div>
+    <div class="to" id="claimWhat"></div>
+    <a class="btn done" id="markPaid">Mark as paid in SplitSnap</a>
+    <p class="note" style="margin:14px 2px 0">Check your UPI app or bank that it arrived first: this is only their word for it.
+      The button opens SplitSnap on the phone you split the bill with.</p>
+  </section>
+
+  <section class="card error" id="broken" hidden>
+    <h1>This link looks broken</h1>
+    <p class="note" style="margin:8px 0 0">Ask whoever sent it to send it again.</p>
+  </section>
+
+  <p class="note" id="footnote" hidden>
+    Your UPI app makes the payment; SplitSnap never sees it. Once you’ve paid, tap “I’ve paid” to let
+    <span id="payee2"></span> know.
+  </p>
+</main>
+<div class="toast" id="toast" role="status"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+// A second link opened in the same tab only changes the part after "#"; read the new details.
+window.addEventListener('hashchange', function () { location.reload(); });
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var params = new URLSearchParams(location.hash.slice(1));
+  var pa = (params.get('pa') || '').trim();
+  var pn = (params.get('pn') || '').trim().slice(0, 60);
+  var am = (params.get('am') || '').trim();
+  var tn = (params.get('tn') || '').trim().slice(0, 40);
+  var to = (params.get('to') || '').trim().slice(0, 40);
+  // The split's and friend's ids in the payer's app, handed back in the "I've paid" link.
+  var id = /^[A-Za-z0-9_\-]{1,40}$/;
+  var split = params.get('s') || '', friend = params.get('f') || '';
+  var ids = id.test(split) && id.test(friend) && friend !== 'me';
+
+  var validAmount = /^\d{1,8}(\.\d{1,2})?$/.test(am) && Number(am) > 0 && Number(am) <= 10000000;
+  var rupees = Number(am);
+  var shown = '₹' + rupees.toLocaleString('en-IN', { minimumFractionDigits: rupees % 1 ? 2 : 0, maximumFractionDigits: 2 });
+
+  // The payer's view: a friend says they've paid.
+  if (params.get('v') === 'paid') {
+    if (!validAmount || !ids) { $('broken').hidden = false; return; }
+    document.title = 'Paid back · SplitSnap';
+    $('claimWho').textContent = (to || 'A friend') + ' says they’ve paid';
+    $('claimAmount').textContent = shown;
+    $('claimWhat').textContent = tn ? 'for ' + tn : '';
+    $('markPaid').href = 'splitsnap://paid?s=' + encodeURIComponent(split) + '&f=' + encodeURIComponent(friend);
+    $('claim').hidden = false;
+    return;
+  }
+
+  // Only well-formed details make buttons: a UPI ID like name@bank and an amount like 615.00.
+  var validVpa = /^[a-zA-Z0-9._\-]{2,256}@[a-zA-Z][a-zA-Z0-9]{1,63}$/.test(pa);
+  if (!validVpa || !validAmount) { $('broken').hidden = false; return; }
+  $('who').textContent = to ? to + ', your share' : 'Your share';
+  $('what').textContent = tn || 'Your share of the bill';
+  $('amount').textContent = shown;
+  $('payee').textContent = pn || pa;
+  var payeeFirst = (pn || '').split(/\s+/)[0];
+  $('payee2').textContent = payeeFirst || 'them';
+  $('paid').textContent = 'I’ve paid · tell ' + (payeeFirst || 'them');
+  $('vpa').textContent = pa;
+  $('copyVpaText').textContent = pa;
+  $('copyAmountText').textContent = rupees.toFixed(2);
+
+  // The same UPI details for every app; only the app's own way in differs.
+  var enc = function (v) { return encodeURIComponent(v).replace(/%40/g, '@'); };
+  var query = 'pa=' + enc(pa) + (pn ? '&pn=' + enc(pn) : '') + '&am=' + enc(rupees.toFixed(2)) + '&cu=INR' +
+              (tn ? '&tn=' + enc(tn) : '');
+  var upi = 'upi://pay?' + query;
+  var ios = /iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  var android = /Android/i.test(navigator.userAgent);
+
+  // Android asks which UPI app to use; iOS has no such chooser, so each app gets its own button there.
+  if (!ios) { $('any').href = upi; $('any').hidden = false; }
+  $('gpay').href = (ios ? 'gpay://upi/pay?' : 'tez://upi/pay?') + query;
+  $('phonepe').href = 'phonepe://pay?' + query;
+  $('paytm').href = 'paytmmp://pay?' + query;
+
+  // On a computer, a QR to scan with the phone instead.
+  if (!ios && !android && window.QRCode) {
+    $('apps').hidden = true;
+    $('any').hidden = true;
+    var box = $('qr');
+    box.style.display = 'block';
+    new QRCode(box, { text: upi, width: 180, height: 180, correctLevel: QRCode.CorrectLevel.M });
+  }
+
+  function toast(text) {
+    var t = $('toast'); t.textContent = text; t.classList.add('show');
+    clearTimeout(toast.timer); toast.timer = setTimeout(function () { t.classList.remove('show'); }, 1600);
+  }
+  function copy(text, label) {
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(function () { toast(label + ' copied'); });
+  }
+  $('copyVpa').onclick = function () { copy(pa, 'UPI ID'); };
+  $('copyAmount').onclick = function () { copy(rupees.toFixed(2), 'Amount'); };
+
+  // "I've paid": a message back to the payer, with a link that lets them tick this friend off in the app.
+  $('paid').onclick = function () {
+    var text = 'I’ve paid you ' + shown + (tn ? ' for ' + tn : '') + '.';
+    if (ids) {
+      var back = location.origin + location.pathname + '#v=paid&am=' + enc(rupees.toFixed(2)) +
+                 (tn ? '&tn=' + enc(tn) : '') + (to ? '&to=' + enc(to) : '') +
+                 '&s=' + enc(split) + '&f=' + enc(friend);
+      text += ' Tick it off in SplitSnap: ' + back;
+    }
+    if (navigator.share && (ios || android)) {
+      navigator.share({ text: text }).catch(function () {});
+    } else {
+      location.href = 'https://wa.me/?text=' + encodeURIComponent(text);
+    }
+  };
+
+  $('pay').hidden = false;
+  $('footnote').hidden = false;
+})();
+</script>
+</body>
+</html>
