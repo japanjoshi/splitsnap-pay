@@ -11,9 +11,15 @@
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
 <!--
   SplitSnap's tap-to-pay page. A friend opens a link like
-    https://<host>/p#pa=name@bank&pn=Japan&am=615.00&cu=INR&tn=The%20Green%20House&to=Rahul&s=<split>&f=<friend>
-  Everything is after "#", which browsers never send to the server: the host sees no UPI ID or amount,
-  and nothing is stored anywhere. The page only turns the details into buttons that open UPI apps.
+    https://<host>/p#name@bank/615.00/The%20Green%20House/Japan/Rahul/<split>.<friend>
+  that is: UPI ID / amount / note / payee / friend's name / ids, in that order, kept short because it is read
+  in a chat. Everything is after "#", which browsers never send to the server: the host sees no UPI ID or
+  amount, and nothing is stored anywhere. The page only turns the details into buttons that open UPI apps.
+
+  A link for a group chat lists everyone, and each friend taps their own name:
+    https://<host>/p#g/name@bank/The%20Green%20House/Japan/<split>/Rahul:615.00:<friend>/Amit:700.00:<friend>
+
+  Links sent by older versions of the app (#pa=name@bank&pn=Japan&am=615.00&...) still open.
 
   After paying, the friend taps "I've paid" and sends the payer a second link to this page (v=paid). On the
   payer's phone that shows a button that opens SplitSnap (splitsnap://paid?s=..&f=..) to tick the friend off.
@@ -68,6 +74,10 @@
   .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: var(--ink); color: var(--canvas);
            padding: 10px 16px; border-radius: 14px; font-weight: 700; font-size: 14px; opacity: 0; transition: opacity .2s; }
   .toast.show { opacity: 1; }
+  .people { margin-top: 20px; }
+  .person { justify-content: space-between; padding: 0 22px; background: var(--field); color: var(--ink); }
+  .person span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .person b { font-weight: 800; font-variant-numeric: tabular-nums; color: var(--brand); flex: none; }
   .error h1 { color: var(--danger); }
   [hidden] { display: none !important; }
 </style>
@@ -102,6 +112,13 @@
     <button type="button" class="btn secondary" id="paid" style="margin-top:18px">I’ve paid</button>
   </section>
 
+  <section class="card" id="group" hidden>
+    <div class="eyebrow">Split the bill</div>
+    <h1 id="groupWhat"></h1>
+    <div class="to" style="margin:6px 0 0">Paid by <b id="groupPayee"></b>. Tap your name to pay your share.</div>
+    <div class="people" id="people"></div>
+  </section>
+
   <section class="card" id="claim" hidden>
     <div class="eyebrow">Paid back</div>
     <h1 id="claimWho"></h1>
@@ -130,23 +147,47 @@
 window.addEventListener('hashchange', function () { location.reload(); });
 (function () {
   var $ = function (id) { return document.getElementById(id); };
-  var params = new URLSearchParams(location.hash.slice(1));
-  var pa = (params.get('pa') || '').trim();
-  var pn = (params.get('pn') || '').trim().slice(0, 60);
-  var am = (params.get('am') || '').trim();
-  var tn = (params.get('tn') || '').trim().slice(0, 40);
-  var to = (params.get('to') || '').trim().slice(0, 40);
+  var hash = location.hash.slice(1);
+  var dec = function (v) { try { return decodeURIComponent(v || ''); } catch (e) { return ''; } };
+  // Three shapes of link, read into the same names. Older links spell every detail out as key=value.
+  var details = {}, group = null;
+  if (/(^|&)(pa|v|am)=/.test(hash)) {
+    new URLSearchParams(hash).forEach(function (value, key) { details[key] = value; });
+  } else {
+    var parts = hash.split('/');
+    if (parts[0] === 'g') {
+      details = { pa: dec(parts[1]), tn: dec(parts[2]), pn: dec(parts[3]), s: dec(parts[4]) };
+      group = parts.slice(5).map(function (part) {
+        var bits = part.split(':');
+        return { name: dec(bits[0]).trim().slice(0, 40), am: dec(bits[1]), id: dec(bits[2]) };
+      });
+    } else {
+      var pair = (parts[5] || '').split('.');
+      details = { pa: dec(parts[0]), am: dec(parts[1]), tn: dec(parts[2]), pn: dec(parts[3]), to: dec(parts[4]),
+                  s: dec(pair[0]), f: dec(pair[1]) };
+    }
+  }
+  var get = function (key) { return details[key] || ''; };
+  var pa = get('pa').trim();
+  var pn = get('pn').trim().slice(0, 60);
+  var am = get('am').trim();
+  var tn = get('tn').trim().slice(0, 40);
+  var to = get('to').trim().slice(0, 40);
   // The split's and friend's ids in the payer's app, handed back in the "I've paid" link.
   var id = /^[A-Za-z0-9_\-]{1,40}$/;
-  var split = params.get('s') || '', friend = params.get('f') || '';
+  var split = get('s'), friend = get('f');
   var ids = id.test(split) && id.test(friend) && friend !== 'me';
 
-  var validAmount = /^\d{1,8}(\.\d{1,2})?$/.test(am) && Number(am) > 0 && Number(am) <= 10000000;
+  var amountOk = function (a) { return /^\d{1,8}(\.\d{1,2})?$/.test(a) && Number(a) > 0 && Number(a) <= 10000000; };
+  var money = function (n) {
+    return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 });
+  };
+  var validAmount = amountOk(am);
   var rupees = Number(am);
-  var shown = '₹' + rupees.toLocaleString('en-IN', { minimumFractionDigits: rupees % 1 ? 2 : 0, maximumFractionDigits: 2 });
+  var shown = money(rupees);
 
   // The payer's view: a friend says they've paid.
-  if (params.get('v') === 'paid') {
+  if (get('v') === 'paid') {
     if (!validAmount || !ids) { $('broken').hidden = false; return; }
     document.title = 'Paid back · SplitSnap';
     $('claimWho').textContent = (to || 'A friend') + ' says they’ve paid';
@@ -159,6 +200,37 @@ window.addEventListener('hashchange', function () { location.reload(); });
 
   // Only well-formed details make buttons: a UPI ID like name@bank and an amount like 615.00.
   var validVpa = /^[a-zA-Z0-9._\-]{2,256}@[a-zA-Z][a-zA-Z0-9]{1,63}$/.test(pa);
+
+  // A group link: everyone who still owes, each a button to their own pay page. Tapping one only changes
+  // the part after "#" to that friend's link, so the Back button returns to this list.
+  if (group) {
+    var people = group.filter(function (p) { return p.name && amountOk(p.am) && id.test(p.id) && p.id !== 'me'; });
+    if (!validVpa || !id.test(split) || !people.length) { $('broken').hidden = false; return; }
+    // The same escaping the app uses, so a link made here matches one it would send.
+    var seg = function (v) {
+      return encodeURIComponent(v).replace(/%40/g, '@').replace(/[.!'()*~]/g, function (c) {
+        return '%' + c.charCodeAt(0).toString(16).toUpperCase();
+      });
+    };
+    $('groupWhat').textContent = tn || 'Your shares';
+    $('groupPayee').textContent = pn || pa;
+    people.slice(0, 40).forEach(function (p) {
+      var row = document.createElement('a');
+      row.className = 'btn person';
+      row.href = '#' + [seg(pa), Number(p.am).toFixed(2), seg(tn), seg(pn), seg(p.name.split(/\s+/)[0]),
+                        seg(split) + '.' + seg(p.id)].join('/');
+      var name = document.createElement('span');
+      name.textContent = p.name;
+      var amount = document.createElement('b');
+      amount.textContent = money(Number(p.am));
+      row.appendChild(name);
+      row.appendChild(amount);
+      $('people').appendChild(row);
+    });
+    $('group').hidden = false;
+    return;
+  }
+
   if (!validVpa || !validAmount) { $('broken').hidden = false; return; }
   $('who').textContent = to ? to + ', your share' : 'Your share';
   $('what').textContent = tn || 'Your share of the bill';
